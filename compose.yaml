@@ -1,0 +1,56 @@
+# Local container stack: PostgreSQL + the app. Requires podman-compose or docker compose.
+# Usage:
+#   export POSTGRES_PASSWORD="$(openssl rand -base64 24 | tr -d '/+=')"
+#   podman login registry.redhat.io
+#   podman compose up --build
+# Ports are published on 127.0.0.1 only.
+services:
+  db:
+    image: registry.redhat.io/rhel9/postgresql-16:latest
+    environment:
+      POSTGRESQL_USER: ebookstore
+      POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRESQL_DATABASE: ebookstore
+    volumes:
+      - pgdata:/var/lib/pgsql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    read_only: false # PostgreSQL must write its data directory (a named volume)
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "ebookstore", "-d", "ebookstore"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build: .
+    command: ["node", "scripts/db-init.mjs", "--seed"]
+    environment:
+      DATABASE_URL: postgresql://ebookstore:${POSTGRES_PASSWORD}@db:5432/ebookstore
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://ebookstore:${POSTGRES_PASSWORD}@db:5432/ebookstore
+      # The compose stack is served over plain HTTP on localhost, so Secure cookies would be dropped.
+      COOKIE_SECURE: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  pgdata:

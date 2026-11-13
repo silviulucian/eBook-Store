@@ -1,36 +1,65 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Paperleaf - demo ebook store
 
-## Getting Started
+Next.js 16 (App Router, Cache Components) + PostgreSQL. Authentication, catalogue, payment and purchase
+confirmation are all real code paths, but **payment is mocked**: no card is ever charged and no third-party
+service is called.
 
-First, run the development server:
+| Area | Where |
+| --- | --- |
+| Data model (ER diagram, decisions) | [`docs/data-model.md`](docs/data-model.md), [`db/schema.sql`](db/schema.sql) |
+| OpenAPI 3.1 spec | [`openapi/openapi.yaml`](openapi/openapi.yaml) |
+| REST API (route handlers) | [`app/api`](app/api), services in [`lib`](lib) |
+| UI | [`app`](app), [`components`](components) |
+| Tests | [`tests`](tests) (Vitest), [`e2e`](e2e) (Playwright) |
+| Deployment | [`docs/deployment.md`](docs/deployment.md), [`Dockerfile`](Dockerfile), [`compose.yaml`](compose.yaml), [`deploy/openshift`](deploy/openshift) |
+| AI-assisted workflow + what still needs you | [`docs/ai-workflow.md`](docs/ai-workflow.md) |
+
+## Run locally
+
+Requirements: Node 22.22+ or 24.15+ (see `.nvmrc`), PostgreSQL 15+.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm ci
+createdb ebookstore && createdb ebookstore_test      # or any two empty databases
+cp .env.example .env.local                           # then set real passwords/URLs
+npm run db:init                                      # applies db/schema.sql + db/seed.sql
+npm run dev                                          # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`.env.local` is git-ignored. Never commit credentials.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Try the purchase flow
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Browse `/books`, open a book, **Add to cart**.
+2. **Checkout** (you are sent to register/sign in; 12+ character password).
+3. Pay with a mock card (any future expiry, any 3-digit CVC):
 
-## Learn More
+| Card | Result |
+| --- | --- |
+| `4242 4242 4242 4242` | Succeeds, shows confirmation code `PL-XXXXXXXX` |
+| `4000 0000 0000 0002` | Declined (order stays pending; retry with another card) |
+| `4000 0000 0000 9995` | Insufficient funds |
 
-To learn more about Next.js, take a look at the following resources:
+## Scripts
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Command | What it does |
+| --- | --- |
+| `npm run dev` / `build` / `start` | Next.js |
+| `npm run lint` / `typecheck` | ESLint / `tsc --noEmit` |
+| `npm test` | Resets **`TEST_DATABASE_URL`** schema, runs Vitest (unit, PostgreSQL integration, component) |
+| `npm run test:e2e` | Builds, resets the test DB, runs Playwright (uses installed Edge; `PW_CHANNEL=chromium` in CI) |
+| `npm run openapi:validate` | Validates the spec and checks it matches every route in `app/api` |
+| `npm run db:init` / `db:reset` | Apply schema+seed / drop everything and re-apply (dev DB) |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+`npm test` and `npm run test:e2e` only ever touch `TEST_DATABASE_URL`.
 
-## Deploy on Vercel
+## Security notes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Passwords: scrypt with per-password salt; constant-time compare; dummy hash on unknown email to blunt user enumeration.
+- Sessions: random 256-bit token in an `HttpOnly`, `SameSite=Lax` cookie (`__Host-` prefix and `Secure` in production). Only a SHA-256 hash is stored server-side; logout deletes it.
+- All SQL is parameterised; search input has LIKE wildcards escaped. All input is validated with Zod on the server.
+- Prices are always read from the database. Orders are scoped to the signed-in user (other users get 404).
+- Card number and CVC are validated in memory and discarded; only brand and last four digits are stored.
+- Origin check on state-changing requests, login/register/pay rate limits, `?next=` open-redirect protection, security headers.
+- Rate limiting is in-memory per process; use a shared store (e.g. Redis) when running more than one replica.
+- Auth/session pieces are intentionally simple for a demo. A real product should use an OIDC/SAML provider and MFA.

@@ -39,3 +39,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local PostgreSQL data + generated credentials
+/.local/
+
+# keep the template
+!.env.example
+
+# test output
+/test-results/
+/playwright-report/

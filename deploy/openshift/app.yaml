@@ -1,0 +1,99 @@
+# Replace IMAGE with your pushed image, e.g. image-registry.openshift-image-registry.svc:5000/<ns>/ebookstore:1.0.0
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ebookstore-migrate
+  labels: { app: ebookstore-migrate }
+spec:
+  backoffLimit: 4
+  template:
+    metadata:
+      labels: { app: ebookstore-migrate }
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: migrate
+          image: IMAGE
+          command: ["node", "scripts/db-init.mjs", "--seed"]
+          envFrom:
+            - secretRef: { name: ebookstore-app }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ebookstore
+  labels: { app: ebookstore }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: ebookstore }
+  template:
+    metadata:
+      labels: { app: ebookstore }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: app
+          image: IMAGE
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - secretRef: { name: ebookstore-app }
+          readinessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: next-cache, mountPath: /app/.next/cache }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        - { name: next-cache, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ebookstore
+  labels: { app: ebookstore }
+spec:
+  selector: { app: ebookstore }
+  ports:
+    - { port: 80, targetPort: 3000 }
+---
+# TLS terminates at the router; plain HTTP is redirected to HTTPS.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ebookstore
+spec:
+  to: { kind: Service, name: ebookstore }
+  port: { targetPort: 80 }
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

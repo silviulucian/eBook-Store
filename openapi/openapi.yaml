@@ -1,0 +1,493 @@
+openapi: 3.1.0
+info:
+  title: Paperleaf Ebook Store API
+  version: 1.0.0
+  description: |
+    REST API for a demo ebook store. **Payments are mocked**: no card is ever charged and no
+    third-party processor is called.
+
+    Authentication uses an opaque session cookie (`session`, or `__Host-session` in production)
+    that is `HttpOnly`, `SameSite=Lax` and `Secure` in production. Obtain it from
+    `/api/auth/register` or `/api/auth/login`.
+
+    **Mock test cards** (any future expiry, any 3-digit CVC):
+
+    | Number | Result |
+    | --- | --- |
+    | `4242 4242 4242 4242` | Succeeds |
+    | `4000 0000 0000 0002` | Declined |
+    | `4000 0000 0000 9995` | Insufficient funds |
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: http://localhost:3000
+    description: Local development
+tags:
+  - name: Health
+  - name: Auth
+  - name: Catalogue
+  - name: Orders
+paths:
+  /api/health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Liveness and database readiness check
+      responses:
+        "200":
+          description: Service and database are reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [ok] }
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      summary: Create an account and sign in
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterRequest" }
+      responses:
+        "201":
+          description: Account created; session cookie set
+          headers:
+            Set-Cookie: { $ref: "#/components/headers/SetSessionCookie" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserResponse" }
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Sign in with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Signed in; session cookie set
+          headers:
+            Set-Cookie: { $ref: "#/components/headers/SetSessionCookie" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserResponse" }
+        "401":
+          description: Invalid email or password
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Sign out and delete the server-side session
+      responses:
+        "204":
+          description: Signed out (idempotent)
+        "403":
+          description: Cross-origin request rejected
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      operationId: getCurrentUser
+      summary: Get the signed-in user
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserResponse" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/categories:
+    get:
+      tags: [Catalogue]
+      operationId: listCategories
+      summary: List book categories
+      responses:
+        "200":
+          description: Categories ordered by name
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Category" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/books:
+    get:
+      tags: [Catalogue]
+      operationId: listBooks
+      summary: Search and browse the catalogue
+      parameters:
+        - name: q
+          in: query
+          description: Case-insensitive match on title or author
+          schema: { type: string, maxLength: 100 }
+        - name: category
+          in: query
+          description: Category slug
+          schema: { type: string, pattern: "^[a-z0-9]+(-[a-z0-9]+)*$", maxLength: 60 }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 10000, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 12 }
+      responses:
+        "200":
+          description: A page of books ordered by title
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BookPage" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/books/{slug}:
+    get:
+      tags: [Catalogue]
+      operationId: getBook
+      summary: Get one book by slug
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The book
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [book]
+                properties:
+                  book: { $ref: "#/components/schemas/Book" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/orders:
+    get:
+      tags: [Orders]
+      operationId: listOrders
+      summary: List the signed-in user's orders (newest first, max 100)
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Orders
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Order" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      tags: [Orders]
+      operationId: createOrder
+      summary: Create a pending order from book ids
+      description: Prices are read from the database; the client cannot set them.
+      security: [{ sessionCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateOrderRequest" }
+      responses:
+        "201":
+          description: Pending order created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderResponse" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "409":
+          description: The user already owns one or more of the books
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/orders/{id}:
+    get:
+      tags: [Orders]
+      operationId: getOrder
+      summary: Get one of the signed-in user's orders
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/OrderId" }
+      responses:
+        "200":
+          description: The order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderResponse" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/orders/{id}/pay:
+    post:
+      tags: [Orders]
+      operationId: payOrder
+      summary: Pay for a pending order (mocked)
+      description: |
+        Runs the mock payment processor. On success the order becomes `paid` and receives a
+        confirmation code. A decline returns 402 and leaves the order `pending` so the user can retry.
+        Only the card brand and last four digits are stored.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/OrderId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PayOrderRequest" }
+      responses:
+        "200":
+          description: Payment succeeded; order is paid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderResponse" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "402":
+          description: Payment declined
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Order is already paid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
+      description: Opaque session token (`__Host-session` when served over HTTPS in production).
+  parameters:
+    OrderId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  headers:
+    SetSessionCookie:
+      description: HttpOnly, SameSite=Lax session cookie (Secure in production), 7 days
+      schema: { type: string }
+  responses:
+    Unauthenticated:
+      description: Missing or expired session
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found (or not owned by the caller)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ValidationError:
+      description: Request failed validation
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimited:
+      description: Too many requests
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalError:
+      description: Unexpected error (details are logged server-side only)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, examples: [validation_error] }
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  path: { type: string }
+                  message: { type: string }
+    User:
+      type: object
+      required: [id, email, name]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        name: { type: string }
+    UserResponse:
+      type: object
+      required: [user]
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+    RegisterRequest:
+      type: object
+      required: [email, name, password]
+      additionalProperties: false
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        name: { type: string, minLength: 1, maxLength: 80 }
+        password: { type: string, minLength: 12, maxLength: 128 }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, minLength: 1, maxLength: 128 }
+    Category:
+      type: object
+      required: [id, slug, name]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+    Book:
+      type: object
+      required: [id, slug, title, author, description, category, priceCents, currency, pages, publishedYear, isbn, coverColor]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        title: { type: string }
+        author: { type: string }
+        description: { type: string }
+        category:
+          type: object
+          required: [slug, name]
+          properties:
+            slug: { type: string }
+            name: { type: string }
+        priceCents: { type: integer, minimum: 0, description: Price in minor units }
+        currency: { type: string, minLength: 3, maxLength: 3, examples: [USD] }
+        pages: { type: [integer, "null"] }
+        publishedYear: { type: [integer, "null"] }
+        isbn: { type: [string, "null"] }
+        coverColor: { type: string, pattern: "^#[0-9a-fA-F]{6}$" }
+    BookPage:
+      type: object
+      required: [items, page, pageSize, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Book" }
+        page: { type: integer }
+        pageSize: { type: integer }
+        total: { type: integer, description: Total matches across all pages }
+    CreateOrderRequest:
+      type: object
+      required: [bookIds]
+      additionalProperties: false
+      properties:
+        bookIds:
+          type: array
+          minItems: 1
+          maxItems: 20
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    Card:
+      type: object
+      required: [number, expMonth, expYear, cvc]
+      additionalProperties: false
+      properties:
+        number:
+          type: string
+          description: 12-19 digits, Luhn-valid; spaces and dashes are ignored
+          examples: ["4242 4242 4242 4242"]
+        expMonth: { type: integer, minimum: 1, maximum: 12 }
+        expYear: { type: integer, minimum: 2000, maximum: 2200 }
+        cvc: { type: string, pattern: "^\\d{3,4}$" }
+    PayOrderRequest:
+      type: object
+      required: [card]
+      additionalProperties: false
+      properties:
+        card: { $ref: "#/components/schemas/Card" }
+    OrderItem:
+      type: object
+      required: [bookId, slug, title, author, unitPriceCents]
+      properties:
+        bookId: { type: string, format: uuid }
+        slug: { type: string }
+        title: { type: string }
+        author: { type: string }
+        unitPriceCents: { type: integer, minimum: 0 }
+    Order:
+      type: object
+      required: [id, status, totalCents, currency, confirmationCode, createdAt, paidAt, items, payment]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, paid] }
+        totalCents: { type: integer, minimum: 0 }
+        currency: { type: string }
+        confirmationCode:
+          type: [string, "null"]
+          description: Set once the order is paid
+          examples: [PL-7K3M9XQ2]
+        createdAt: { type: string, format: date-time }
+        paidAt: { type: [string, "null"], format: date-time }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/OrderItem" }
+        payment:
+          type: [object, "null"]
+          required: [cardBrand, cardLast4, transactionRef]
+          properties:
+            cardBrand: { type: string }
+            cardLast4: { type: string, pattern: "^\\d{4}$" }
+            transactionRef: { type: string }
+    OrderResponse:
+      type: object
+      required: [order]
+      properties:
+        order: { $ref: "#/components/schemas/Order" }

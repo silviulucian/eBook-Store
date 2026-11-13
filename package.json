@@ -6,21 +6,50 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --env-file-if-exists=.env.local scripts/db-init.mjs --test --reset --seed && node --env-file-if-exists=.env.local node_modules/.bin/vitest run",
+    "test:watch": "vitest",
+    "db:init": "node --env-file-if-exists=.env.local scripts/db-init.mjs --seed",
+    "db:reset": "node --env-file-if-exists=.env.local scripts/db-init.mjs --reset --seed",
+    "openapi:validate": "node scripts/validate-openapi.mjs",
+    "test:e2e": "next build && node --env-file-if-exists=.env.local scripts/db-init.mjs --test --reset --seed && node --env-file-if-exists=.env.local node_modules/.bin/playwright test",
+    "db:init:test": "node --env-file-if-exists=.env.local scripts/db-init.mjs --test --seed"
   },
   "dependencies": {
     "next": "16.4.6",
+    "pg": "^8.23.1",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "server-only": "^0.0.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@apidevtools/swagger-parser": "^13.1.0",
+    "@playwright/test": "^1.65.0",
     "@tailwindcss/turbopack": "4.3.3",
-    "@types/node": "^20",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.9",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.3.0",
     "eslint": "^9",
     "eslint-config-next": "16.4.6",
+    "jsdom": "^31.0.0",
     "tailwindcss": "4.3.3",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^5.1.0",
+    "yaml": "^2.9.1"
+  },
+  "overrides": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.5"
+    }
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0"
   }
 }
